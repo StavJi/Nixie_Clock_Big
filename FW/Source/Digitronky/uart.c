@@ -4,13 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 #include "uart.h"
+#include "rtc.h"
 
 
 #define RX_UKONCENE 1
 #define RX_NEUKONCENE 2
 
 
-#define	BUF_SIZE 128 					// Velkost rx pola
+#define	BUF_SIZE 128	// Velkost rx pola
 char rx_buff[BUF_SIZE];	//inicializacia rx pola
 volatile unsigned char rx_pos,rx_stav = RX_NEUKONCENE;				// ukazovatel pola, stav rx dat
 
@@ -20,6 +21,8 @@ volatile unsigned char rx_pos,rx_stav = RX_NEUKONCENE;				// ukazovatel pola, st
     - nastavenie baudRate - ako vstupna premenna
     - zapne vysielac a prijimac
     - 8 datovych a 1 stop bity
+
+Zdroj: https://svetelektro.com/clanky/programujeme-avr-v-jazyku-c-8-cast-511/
 ******************************************************/
 
 void uart_init(unsigned int baud)
@@ -128,7 +131,8 @@ ISR(USART_RXC_vect)
 
 void uart_flush(void)
 {
-	unsigned char dummy;
+	//@unsigned char dummy;
 
-	while ( UCSRA & (1<<RXC) ) dummy = UDR;
+	//@while ( UCSRA & (1<<RXC) ) dummy = UDR;
+	rx_pos = 0;
 }

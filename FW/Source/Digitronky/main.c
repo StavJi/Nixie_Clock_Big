@@ -11,7 +11,10 @@
 #include <stdio.h>
 #include <math.h>
 #include <avr/pgmspace.h>
-#include "i2cmaster.h"
+#include <string.h>
+#include "common.h"
+#include "communication.h"
+#include "rtc.h"
 
 //************* KATODY ****************
 #define KATODA_0_PORT		PORTB		
@@ -143,32 +146,6 @@
 
 #define CAS_NECINNOST		10000		// cca 10s
 
-// Adresy RTC
-
-#define DS1307				0xD0//0x68	// adresa obvodu
-#define RTC_SEC				0x00		// adresa sekund
-#define RTC_MIN				0x01		// adresa minut
-#define RTC_HOD				0x02		// adresa hodin
-#define RTC_DAY				0x04		// den
-#define RTC_WEEK_DAY		0x03		// den v tydnu
-#define RTC_MONTH			0x05		// mesic
-#define RTC_YEAR			0x06		// rok
-
-#define MO 1
-#define TU 2
-#define WE 3
-#define TH 4
-#define FR 5
-#define SA 6
-#define SU 7
-
-#define DAYLIGHTS_BEGIN_DAY SU
-#define DAYLIGHTS_BEGIN_MONTH 3
-#define DAYLIGHTS_BEGIN_HOUR 2
-#define DAYLIGHTS_END_DAY SU
-#define DAYLIGHTS_END_MONTH 10
-#define DAYLIGHTS_END_HOUR 3
-
 // ******* NEMENIT ******* //
 
 volatile unsigned char disp[6] = {10,10,10,10,10,10};	// globalni promenna pro zobrazovaci rutinu, zapsanim 10 se cislice zhasne
@@ -176,8 +153,7 @@ volatile uint8_t pos;									// index prave zobrazovane pozice
 volatile uint8_t menu = 0;								// informuje o vstupu do menu 
 volatile uint8_t blikej = 0b10000000;					// promenna urcujici zda se ma blikat a kterou cislici aktivni spodni polovina bajtu
 														// horni polovina tecky
-volatile uint16_t rok = 0;								// den													
-														
+
 														
 volatile uint8_t blikej_cnt = 0;						// pocitadlo pro blikani
 volatile uint8_t temp = 0;								// pomocne promenne
@@ -185,32 +161,27 @@ volatile uint16_t timer = 0;							// pocitadlo necinosti
 volatile uint16_t time_tl_1 = 0;						// promenna urcujici delku zmacknuteho tlacitka
 volatile uint16_t time_tl_2 = 0;						// promenna urcujici delku zmacknuteho tlacitka
 volatile uint16_t time_tl_3 = 0;						// promenna urcujici delku zmacknuteho tlacitka
-volatile uint8_t tlacitko_1 = 0, tlacitko_1_old = 0;	// co ma dane tlacitko vykonavat
-volatile uint8_t tlacitko_2 = 0, tlacitko_2_old = 0;	// co ma dane tlacitko vykonavat
-volatile uint8_t tlacitko_3 = 0, tlacitko_3_old = 0;	// co ma dane tlacitko vykonavat
+volatile uint8_t tlacitko_1 = 0, tlacitko_1_old = 0;	// stav tlacitka
+volatile uint8_t tlacitko_2 = 0, tlacitko_2_old = 0;	// stav tlacitka
+volatile uint8_t tlacitko_3 = 0, tlacitko_3_old = 0;	// stav tlacitka
 
 volatile uint16_t sec = 0;
-volatile uint8_t i2cdata = 0, i2cERR = 0;
-
-signed char UART_test[30];								// promenna na test programu po UARTu
 
 void init(void);
-void zobraz_cislo(uint8_t cislo);
-void read(unsigned char reg);
-void write(unsigned char reg);
-void read_time(char *dest);
-void read_date(char *dest);
-void clockCheckDaylightSaving(void);
+void displayNumber(uint8_t cislo);
+
 
 int main(void)
 {
-	i2c_init();
+	sTimeData_t actualTime;
+	uint8_t previousHour = 0;
+	eStatusYesNo_t status;
+	
+	rtcInit();
 	init();
-	
-	read_date((char*)&disp[0]);
-	
-	_delay_ms(10000);
-	
+	commInit();
+	status = rtcLoadTime(&actualTime);
+
 	for(;;)
 	{
 		if (menu)						// nastaveni casu
@@ -263,19 +234,54 @@ int main(void)
 			blikej = 0b10000000;
 			sec = 0;
 			
-			i2cdata = ((disp[0]<<4)+disp[1]);	// slozit BCD hodnotu
-			write(RTC_HOD);
-			i2cdata = ((disp[2]<<4)+disp[3]);	// slozit BCD hodnotu
-			write(RTC_MIN);
-			i2cdata = 0;
-			write(RTC_SEC);			
+			// if user changed something
+			if (timer != 0)
+			{
+				// Hours
+				actualTime.hours = disp[0] * 10 + disp[1];
+				// Minutes
+				actualTime.minutes = disp[2] * 10 + disp[3];
+				// Seconds
+				actualTime.seconds = 0;
+			
+				status = rtcSaveTime(&actualTime);
+				previousHour = actualTime.hours;
+			}
 		}
 		else
 		{								// normalni beh hodin
+			previousHour = actualTime.hours;
+			status = rtcLoadTime(&actualTime);
 			
-			read_time((char*)&disp[0]);
-				
-			if (i2cERR > 0)
+			// seconds
+			disp[5]= actualTime.seconds % 10; 
+			disp[4]= actualTime.seconds / 10;
+			
+			// minutes	
+			disp[3]= actualTime.minutes % 10;
+			disp[2]= actualTime.minutes /10;
+			
+			// hours	
+			disp[1]= actualTime.hours % 10;
+			disp[0]= actualTime.hours / 10;
+			
+			// Each hour iterate over each digit to prevent cathode poisoning 
+			if (previousHour != actualTime.hours)
+			{
+				for (uint8_t i = 0; i < 10; i++ )
+				{
+					disp[0] = i;
+					disp[1] = i;
+					disp[2] = i;
+					disp[3] = i;
+					_delay_ms(500);
+				}
+			}
+			
+			// AT command parse
+			commProcess();
+							
+			if (status == NO) // Future TODO this should indicate ERROR
 			{
 				LED_1_ON;
 				blikej = 0b00001111;		// blikej hodinama i minutama
@@ -334,12 +340,12 @@ void init (void)
 	DOUTNAVKA_OFF;
 	
 	// vystupy LEDky
-	LED_1_DDR |= (1 << LED_1_NUMBER);
-	LED_2_DDR |= (1 << LED_2_NUMBER);
+	//LED_1_DDR |= (1 << LED_1_NUMBER);
+	//LED_2_DDR |= (1 << LED_2_NUMBER);
 	
 	// zhasnuti LEDek
-	LED_1_OFF;
-	LED_2_OFF;
+	//LED_1_OFF;
+	//LED_2_OFF;
 	
 	// timer 0
 	TCCR0 |= (1 << CS02);						// preddelicka 256
@@ -355,7 +361,7 @@ void init (void)
 	sei();										// povol globalni preruseni
 }
 
-void zobraz_cislo(uint8_t cislo)
+void displayNumber(uint8_t cislo)
 {
 	switch (cislo)			// vybrat cislo
 	{
@@ -394,101 +400,6 @@ void zobraz_cislo(uint8_t cislo)
 	}// end switch
 }
 
-void read(unsigned char reg)
-{
-	i2cERR = i2c_start(DS1307+I2C_WRITE);		// zapis do DS3231
-	
-	if (i2cERR == 0)
-	{
-		i2c_write(reg);									// adresa bunky
-		i2c_rep_start(DS1307+I2C_READ);					// cteni z DS3231
-		i2cdata = i2c_readNak();						// ulozit prectenou hodnotu do globalni promenne
-		i2c_stop();		               					// stop
-	}
-}
-
-void write(unsigned char reg)
-{
-	i2cERR = i2c_start(DS1307+I2C_WRITE);
-	
-	if (i2cERR == 0)
-	{
-		i2c_write(reg);	        						// 	vyber adresy( hodiny minuty atd)
-		i2c_write(i2cdata);								// 	zapise BCD na vybranou adresu
-		i2c_stop(); 									//	stop
-	}
-}
-
-void read_time(char *dest)							// funkce pro vycteni casu z RTC do zvoleneho pole
-{
-	read(RTC_SEC);
-	if (i2cERR == 0)
-	{
-		dest[5]=(i2cdata & 0x0F);
-		dest[4]=((i2cdata >>4)& 0b00000111);
-		read(RTC_MIN);
-		dest[3]=(i2cdata & 0x0F);
-		dest[2]=((i2cdata >>4)& 0b00000111);
-		read(RTC_HOD);
-		dest[1]=(i2cdata & 0x0F);
-		dest[0]=((i2cdata >>4)& 0b00000011);
-	}
-}
-
-void read_date(char *dest)
-{
-	read(RTC_DAY);
-	if (i2cERR == 0)
-	{
-//		rok = i2cdata;
-		dest[3]=(i2cdata & 0x0F);
-		dest[2]=((i2cdata >>4)& 0x0F);
-	}
-}
-
-void clockCheckDaylightSaving(void)
-{
-	if (SR_GetBool(SR_TIME_YR,SR_TIME_YR_TIME_DAYLGHT_S) == false)
-	{
-		if ( (clock_now.month == DAYLIGHTS_BEGIN_MONTH) && 
-			 (clock_now.dayOfWeek == DAYLIGHTS_BEGIN_DAY) && 
-			 ((clock_now.day + 7) > 31) && 
-			 (clock_now.hours == DAYLIGHTS_BEGIN_HOUR) && 
-			 (clock_now.minutes == 0) && 
-			 (clock_now.seconds == 0))
-		{
-			clock_now.hours += 1;
-			clockSetRTC();
-			SR_SetBool(SR_TIME_YR,SR_TIME_YR_TIME_DAYLGHT_S,true);
-		}
-		if ( ( (clock_now.month > DAYLIGHTS_BEGIN_MONTH) && (clock_now.month < DAYLIGHTS_END_MONTH)) || 
-			 ( (clock_now.month == DAYLIGHTS_BEGIN_MONTH) && ((clock_now.day - clock_now.dayOfWeek + 7) > 31)) || 
-			 ( (clock_now.month == DAYLIGHTS_END_MONTH) && ( ( (clock_now.day - clock_now.dayOfWeek + 7) < 31) && (clock_now.dayOfWeek != SU)) || (clock_now.day < 25)) || 
-			 ( ( (clock_now.month == DAYLIGHTS_END_MONTH) && (clock_now.dayOfWeek == DAYLIGHTS_END_DAY) && (clock_now.day + 7 > 31) && (((uint32_t)clock_now.hours * 3600 + clock_now.minutes * 60 + clock_now.seconds) < 7200)) || ((clock_now.month == DAYLIGHTS_BEGIN_MONTH) && (clock_now.dayOfWeek == DAYLIGHTS_BEGIN_DAY) && (clock_now.day + 7 > 31) && (((uint32_t)clock_now.hours * 3600 + clock_now.minutes * 60 + clock_now.seconds) > 10800))))
-		{
-			SR_SetBool(SR_TIME_YR,SR_TIME_YR_TIME_DAYLGHT_S,true);
-		}
-
-	}
-	else
-	{
-		if ( (clock_now.month == DAYLIGHTS_END_MONTH) && 
-			 (clock_now.dayOfWeek == DAYLIGHTS_END_DAY) && 
-			 (clock_now.day + 7 > 31) && 
-			 (clock_now.hours == DAYLIGHTS_END_HOUR) && 
-			 (clock_now.minutes == 0) && (clock_now.seconds == 0))
-		{
-			clock_now.hours -= 1;
-			clockSetRTC();
-			SR_SetBool(SR_TIME_YR,SR_TIME_YR_TIME_DAYLGHT_S,false);
-		}
-		else if ( ((clock_now.month < DAYLIGHTS_BEGIN_MONTH) && (clock_now.month > DAYLIGHTS_END_MONTH)) || ((clock_now.month == DAYLIGHTS_END_MONTH) && ((clock_now.day - clock_now.dayOfWeek + 7) > 31)) || ((clock_now.month == DAYLIGHTS_BEGIN_MONTH) && (((clock_now.day - clock_now.dayOfWeek + 7) < 31) && (clock_now.dayOfWeek != SU)) && (clock_now.day < 25)) || (((clock_now.month == DAYLIGHTS_BEGIN_MONTH) && (clock_now.dayOfWeek == DAYLIGHTS_BEGIN_DAY) && (clock_now.day + 7 > 31) && (((uint32_t)clock_now.hours * 3600 + clock_now.minutes * 60 + clock_now.seconds) < 7200)) || ((clock_now.month == DAYLIGHTS_END_MONTH) && (clock_now.dayOfWeek == DAYLIGHTS_END_DAY) && (clock_now.day + 7 > 31) && (((uint32_t)clock_now.hours * 3600 + clock_now.minutes * 60 + clock_now.seconds) > 10800))))
-		{
-			SR_SetBool(SR_TIME_YR,SR_TIME_YR_TIME_DAYLGHT_S,false);
-		}
-	}
-}
-
 ISR(TIMER2_COMP_vect)							// tlacitka
 {
 	tlacitko_1_old <<= 1;
@@ -503,13 +414,10 @@ ISR(TIMER2_COMP_vect)							// tlacitka
 	tlacitko_3_old |= (TLACITKO_3_ZMACKNUTO >> TLACITKO_3_NUMBER);
 	tlacitko_3_old &= 0b11111111;
 
-	if (i2cERR == 0)
+	if (tlacitko_2_old == 0b11110000)
 	{
-		if (tlacitko_2_old == 0b11110000)
-		{
-			menu ^= 1;
-			timer = CAS_NECINNOST;
-		}
+		menu ^= 1;
+		timer = CAS_NECINNOST;
 	}
 	
 	if(menu)
@@ -594,7 +502,7 @@ ISR(TIMER0_OVF_vect)								// multiplex
 	{
 		if(blikej_cnt > 50)							// sviti dele nez je zhasnuto
 		{
-			zobraz_cislo(disp[pos]);
+			displayNumber(disp[pos]);
 		}
 		else
 		{
@@ -603,7 +511,7 @@ ISR(TIMER0_OVF_vect)								// multiplex
 	}
 	else
 	{												// blikani cislici je vypnuto
-		zobraz_cislo(disp[pos]);					// zobraz trvale
+		displayNumber(disp[pos]);					// zobraz trvale
 	}
 	
 	if( blikej & 0b10000000 )

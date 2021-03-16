@@ -8,6 +8,8 @@
     - nastavenie baudRate - ako vstupna premenna
     - zapne vysielac a prijimac
     - 8 datovych a 1 stop bity
+
+Zdroj: https://svetelektro.com/clanky/programujeme-avr-v-jazyku-c-8-cast-511/	
 ******************************************************/
 
 extern void uart_init(unsigned int baud);
